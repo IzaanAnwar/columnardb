@@ -36,3 +36,4 @@ go.work.sum
 
 # temp markdown files
 *.md.tmp
+*.tmp.md
