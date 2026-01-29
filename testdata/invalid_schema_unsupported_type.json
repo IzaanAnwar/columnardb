@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "columns": [
+    { "name": "id", "type": "enum", "nullable": false }
+  ]
+}
