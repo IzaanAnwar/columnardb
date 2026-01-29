@@ -2,8 +2,8 @@ package schema
 
 import "fmt"
 
-// ValidateSchema ensures the schema meets all database requirements.
-// Returns error for invalid schemas, nil for valid ones.
+// ValidateSchema ensures schema meets all structural requirements.
+// Returns error for any violation, nil for valid schemas.
 func ValidateSchema(s *Schema) error {
 	if s.Version <= 0 {
 		return fmt.Errorf("Schema version must be > 0")
@@ -15,8 +15,7 @@ func ValidateSchema(s *Schema) error {
 
 	seen := make(map[string]struct{})
 
-	for i, col := range s.Columns {
-
+	for _, col := range s.Columns {
 		if col.Name == "" {
 			return fmt.Errorf("Column name cannot be empty")
 		}
@@ -24,18 +23,24 @@ func ValidateSchema(s *Schema) error {
 		if _, ok := seen[col.Name]; ok {
 			return fmt.Errorf("Duplicate column name: %s", col.Name)
 		}
-
 		seen[col.Name] = struct{}{}
 
 		switch col.Type {
-		case TypeInt64, TypeBool, TypeString:
-			// ok
+		case TypeInt64, TypeFloat64, TypeBool, TypeString, TypeTimestamp:
+			// Valid type
 		default:
 			return fmt.Errorf("Unsupported column type: %s", col.Type)
 		}
 
-		s.Columns[i].Index = i
 	}
 
 	return nil
+}
+
+// InitializeSchema sets derived runtime state for a validated schema.
+// Must be called after ValidateSchema passes. Assumes schema is valid.
+func InitializeSchema(s *Schema) {
+	for i := range s.Columns {
+		s.Columns[i].Index = i
+	}
 }
