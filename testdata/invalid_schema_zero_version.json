@@ -1,0 +1,6 @@
+{
+  "version": 0,
+  "columns": [
+    { "name": "id", "type": "string", "nullable": false }
+  ]
+}

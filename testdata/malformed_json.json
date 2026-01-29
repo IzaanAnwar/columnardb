@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "columns": [
+    { "name": "id", "type": "string", "nullable": false },
+    { "name": "age", "type": "int64", "nullable": false },
+    { "name": "income", "type": "float64", "nullable": false },
+    { "name": "active", "type": "bool", "nullable": true },
+    { "name": "created_at", "type": "timestamp", "nullable": false }
+  ]
