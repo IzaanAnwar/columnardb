@@ -8,10 +8,13 @@ import (
 	timestampcol "columnar/internal/column/timestamp_col"
 	"columnar/internal/schema"
 	"fmt"
-	"path/filepath"
 )
 
-// createColumnWriter creates a column writer for a single column
+// createColumnWriter creates a type-specific column writer for a single schema column.
+// Factory function that instantiates the appropriate writer based on column type.
+//
+// segmentDir: Directory where column files will be created (segment temp directory)
+// col: Schema column definition containing name and type information
 func createColumnWriter(
 	segmentDir string,
 	col schema.Column,
@@ -19,23 +22,19 @@ func createColumnWriter(
 
 	switch col.Type {
 	case schema.TypeInt64:
-		path := filepath.Join(segmentDir, col.Name+".bin")
-		return int64col.NewWriter(path)
+		return int64col.NewWriter(segmentDir, col.Name)
 
 	case schema.TypeFloat64:
-		path := filepath.Join(segmentDir, col.Name+".bin")
-		return float64col.NewWriter(path)
+		return float64col.NewWriter(segmentDir, col.Name)
 
 	case schema.TypeBool:
-		path := filepath.Join(segmentDir, col.Name+".bin")
-		return boolcol.NewWriter(path)
+		return boolcol.NewWriter(segmentDir, col.Name)
 
 	case schema.TypeString:
-		path := filepath.Join(segmentDir, col.Name+".bin")
-		return stringcol.NewWriter(path)
+		return stringcol.NewWriter(segmentDir, col.Name)
 
 	case schema.TypeTimestamp:
-		return timestampcol.NewWriter(colPath)
+		return timestampcol.NewWriter(segmentDir, col.Name)
 
 	default:
 		return nil, fmt.Errorf("unsupported column type: %s", col.Type)

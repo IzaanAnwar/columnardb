@@ -6,23 +6,29 @@ import (
 	"os"
 )
 
+// Writer writes string values to column files with dictionary encoding and null bitmap support.
+// Creates three files: .ids.bin (dictionary indices), .dict.bin (string dictionary), .nulls.bin (null bitmap).
 type Writer struct {
 	idsFile   *os.File
 	dictFile  *os.File
 	nullsFile *os.File
 
-	// dictionary
+	// Dictionary mapping for compression
 	strToID map[string]uint32
 	idToStr []string
 
-	// null bitmap state
+	// Null bitmap state: 8 bits per byte, MSB-first
 	nullByte byte
 	nullBit  uint8 // 0..7
 
 	recordCount int
+	nullCount   int
 	closed      bool
 }
 
+// NewWriter creates a new string column writer.
+// basePath: directory path where files will be created
+// colName: name of the column (used for file naming)
 func NewWriter(basePath string, colName string) (*Writer, error) {
 	idsPath := basePath + "/" + colName + ".ids.bin"
 	dictPath := basePath + "/" + colName + ".dict.bin"
@@ -55,6 +61,9 @@ func NewWriter(basePath string, colName string) (*Writer, error) {
 	}, nil
 }
 
+// writeNullBit writes a bit to the null bitmap.
+// isNotNull: true if the value is not null, false if null
+// Uses MSB-first bit order: bit 7 is first, bit 0 is last
 func (w *Writer) writeNullBit(isNotNull bool) {
 	if isNotNull {
 		w.nullByte |= 1 << (7 - w.nullBit)
@@ -69,16 +78,19 @@ func (w *Writer) writeNullBit(isNotNull bool) {
 	}
 }
 
+// Write writes one string value to the column.
+// Accepts string or nil (for null values). Uses dictionary encoding for compression.
 func (w *Writer) Write(value any) error {
 	if w.closed {
 		return fmt.Errorf("write on closed string writer")
 	}
 
-	// Handle NULL
+	// Handle null values: write 0 as dictionary index
 	if value == nil {
+		w.nullCount++
 		w.writeNullBit(false)
 		if err := binary.Write(w.idsFile, binary.LittleEndian, uint32(0)); err != nil {
-			return fmt.Errorf("write placeholder id: %w", err)
+			return fmt.Errorf("write null placeholder: %w", err)
 		}
 		w.recordCount++
 		return nil
@@ -90,8 +102,10 @@ func (w *Writer) Write(value any) error {
 		return fmt.Errorf("string writer expects string or nil, got %T", value)
 	}
 
+	// Mark as not null in bitmap
 	w.writeNullBit(true)
 
+	// Dictionary encoding: get existing ID or assign new one
 	id, ok := w.strToID[s]
 	if !ok {
 		id = uint32(len(w.idToStr))
@@ -99,6 +113,7 @@ func (w *Writer) Write(value any) error {
 		w.idToStr = append(w.idToStr, s)
 	}
 
+	// Write dictionary index (4 bytes, little-endian)
 	if err := binary.Write(w.idsFile, binary.LittleEndian, id); err != nil {
 		return fmt.Errorf("write string id: %w", err)
 	}
@@ -107,20 +122,22 @@ func (w *Writer) Write(value any) error {
 	return nil
 }
 
+// Close closes the writer and flushes all remaining data.
+// Writes dictionary to file and flushes partial bitmap bytes.
 func (w *Writer) Close() error {
 	if w.closed {
 		return fmt.Errorf("string writer already closed")
 	}
 	w.closed = true
 
-	// Flush remaining null bits
+	// Flush remaining null bitmap bits
 	if w.nullBit > 0 {
 		if _, err := w.nullsFile.Write([]byte{w.nullByte}); err != nil {
 			return fmt.Errorf("flush null bitmap: %w", err)
 		}
 	}
 
-	// Write dictionary
+	// Write dictionary: length-prefixed strings
 	for _, s := range w.idToStr {
 		b := []byte(s)
 		if err := binary.Write(w.dictFile, binary.LittleEndian, uint32(len(b))); err != nil {
@@ -144,6 +161,17 @@ func (w *Writer) Close() error {
 	return nil
 }
 
+// RecordCount returns the number of records written.
 func (w *Writer) RecordCount() int {
 	return w.recordCount
+}
+
+// DictionarySize returns the number of unique strings in the dictionary.
+func (w *Writer) DictionarySize() int {
+	return len(w.idToStr)
+}
+
+// NullCount returns the number of null values written.
+func (w *Writer) NullCount() int {
+	return w.nullCount
 }
