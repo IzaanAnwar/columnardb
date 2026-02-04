@@ -64,7 +64,7 @@ func NewWriter(basePath string, colName string) (*Writer, error) {
 // writeNullBit writes a bit to the null bitmap.
 // isNotNull: true if the value is not null, false if null
 // Uses MSB-first bit order: bit 7 is first, bit 0 is last
-func (w *Writer) writeNullBit(isNotNull bool) {
+func (w *Writer) writeNullBit(isNotNull bool) error {
 	if isNotNull {
 		w.nullByte |= 1 << (7 - w.nullBit)
 	}
@@ -72,10 +72,14 @@ func (w *Writer) writeNullBit(isNotNull bool) {
 	w.nullBit++
 
 	if w.nullBit == 8 {
-		w.nullsFile.Write([]byte{w.nullByte})
+		if _, err := w.nullsFile.Write([]byte{w.nullByte}); err != nil {
+			return err
+		}
 		w.nullByte = 0
 		w.nullBit = 0
 	}
+
+	return nil
 }
 
 // Write writes one string value to the column.
@@ -88,7 +92,9 @@ func (w *Writer) Write(value any) error {
 	// Handle null values: write 0 as dictionary index
 	if value == nil {
 		w.nullCount++
-		w.writeNullBit(false)
+		if err := w.writeNullBit(false); err != nil {
+			return fmt.Errorf("write null bitmap: %w", err)
+		}
 		if err := binary.Write(w.idsFile, binary.LittleEndian, uint32(0)); err != nil {
 			return fmt.Errorf("write null placeholder: %w", err)
 		}
@@ -103,12 +109,15 @@ func (w *Writer) Write(value any) error {
 	}
 
 	// Mark as not null in bitmap
-	w.writeNullBit(true)
+	if err := w.writeNullBit(true); err != nil {
+		return fmt.Errorf("write null bitmap: %w", err)
+	}
 
 	// Dictionary encoding: get existing ID or assign new one
 	id, ok := w.strToID[s]
 	if !ok {
-		id = uint32(len(w.idToStr))
+		// Reserve 0 for NULL; real IDs start at 1.
+		id = uint32(len(w.idToStr) + 1)
 		w.strToID[s] = id
 		w.idToStr = append(w.idToStr, s)
 	}

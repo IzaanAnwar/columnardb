@@ -23,7 +23,7 @@ func (w *Writer) Write(value any) error {
 	case nil:
 		return w.inner.Write(nil)
 	case time.Time:
-		return w.inner.Write(v.UnixNano())
+		return w.inner.Write(v.UnixMilli())
 	case int64:
 		return w.inner.Write(v)
 	default:

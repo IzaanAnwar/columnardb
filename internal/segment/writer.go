@@ -14,13 +14,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 )
 
 // ColumnWriter defines the interface for writing column data.
 // Implementations handle type-specific encoding, statistics collection, and file I/O.
 type ColumnWriter interface {
+	// Write appends one value (including nulls) and must be called exactly once
+	// per column for each logical record.
 	Write(value any) error
 	Close() error
+	// RecordCount must increase by exactly 1 per successful Write() call.
 	RecordCount() int
 }
 
@@ -78,6 +82,7 @@ func NewSegmentWriter(basePath string, segmentID int, schema *schema.Schema) (*S
 // WriteRecord writes one logical record to all columns.
 // The record map must contain values for all columns defined in the schema.
 // Values are written to column writers in schema order to maintain alignment.
+// TODO(v2): Add ordered/batch ingestion APIs; keep map-based ingestion as a thin adapter.
 func (w *SegmentWriter) WriteRecord(record map[string]any) error {
 	if w.committed {
 		return fmt.Errorf("Cannot write to committed segment")
@@ -90,6 +95,10 @@ func (w *SegmentWriter) WriteRecord(record map[string]any) error {
 			return fmt.Errorf("Missing value for column %q", col.Name)
 		}
 
+		if !col.Nullable && isNilValue(value) {
+			return fmt.Errorf("Null value for non-nullable column %q", col.Name)
+		}
+
 		if err := w.writers[i].Write(value); err != nil {
 			return fmt.Errorf("Failed to write column %q: %w", col.Name, err)
 		}
@@ -97,6 +106,20 @@ func (w *SegmentWriter) WriteRecord(record map[string]any) error {
 
 	w.recordCount++
 	return nil
+}
+
+func isNilValue(value any) bool {
+	if value == nil {
+		return true
+	}
+
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Interface, reflect.Slice:
+		return rv.IsNil()
+	default:
+		return false
+	}
 }
 
 // Commit atomically finalizes the segment by closing writers and renaming temp directory.
@@ -108,11 +131,17 @@ func (w *SegmentWriter) Commit() error {
 	}
 
 	// Close all column writers and flush any remaining data
+	// Best-effort close: attempt all writers even if one fails.
+	// Abort cleans up the temp dir after partial closes.
+	var closeErr error
 	for _, writer := range w.writers {
-		if err := writer.Close(); err != nil {
-			w.Abort()
-			return err
+		if err := writer.Close(); err != nil && closeErr == nil {
+			closeErr = err
 		}
+	}
+	if closeErr != nil {
+		w.Abort()
+		return closeErr
 	}
 
 	// Validate that all columns have identical record counts
