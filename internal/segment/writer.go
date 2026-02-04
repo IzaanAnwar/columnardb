@@ -10,7 +10,9 @@
 package segment
 
 import (
+	"columnar/internal/metadata"
 	"columnar/internal/schema"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -152,7 +154,10 @@ func (w *SegmentWriter) Commit() error {
 		}
 	}
 
-	// TODO: Write metadata.json before atomic rename
+	if err := w.writeMetadata(); err != nil {
+		w.Abort()
+		return err
+	}
 
 	// Atomic commit: rename temp directory to final directory
 	if err := os.Rename(w.tempDir, w.finalDir); err != nil {
@@ -161,6 +166,9 @@ func (w *SegmentWriter) Commit() error {
 	}
 
 	w.committed = true
+	if err := w.updateManifest(); err != nil {
+		return fmt.Errorf("segment committed but manifest update failed: %w", err)
+	}
 	return nil
 }
 
@@ -170,4 +178,90 @@ func (w *SegmentWriter) Commit() error {
 func (w *SegmentWriter) Abort() error {
 	_ = os.RemoveAll(w.tempDir)
 	return nil
+}
+
+func (w *SegmentWriter) writeMetadata() error {
+	meta := metadata.SegmentMetadata{
+		SegmentID:   w.segmentID,
+		RecordCount: w.recordCount,
+		Columns:     make([]metadata.ColumnMetadata, len(w.schema.Columns)),
+	}
+
+	for i, col := range w.schema.Columns {
+		writer := w.writers[i]
+		colMeta := metadata.ColumnMetadata{
+			Name:        col.Name,
+			Type:        string(col.Type),
+			RecordCount: writer.RecordCount(),
+		}
+
+		if nc, ok := writer.(interface{ NullCount() int }); ok {
+			colMeta.NullCount = nc.NullCount()
+		}
+
+		switch col.Type {
+		case schema.TypeInt64, schema.TypeTimestamp:
+			if mm, ok := writer.(interface {
+				Min() int64
+				Max() int64
+			}); ok && colMeta.NullCount < colMeta.RecordCount {
+				colMeta.MinValue = mm.Min()
+				colMeta.MaxValue = mm.Max()
+			}
+		case schema.TypeFloat64:
+			if mm, ok := writer.(interface {
+				Min() float64
+				Max() float64
+			}); ok && colMeta.NullCount < colMeta.RecordCount {
+				colMeta.MinValue = mm.Min()
+				colMeta.MaxValue = mm.Max()
+			}
+		case schema.TypeString:
+			if ds, ok := writer.(interface{ DictionarySize() int }); ok {
+				colMeta.DictionarySize = ds.DictionarySize()
+			}
+		}
+
+		meta.Columns[i] = colMeta
+	}
+
+	metaPath := filepath.Join(w.tempDir, "metadata.json")
+	file, err := os.Create(metaPath)
+	if err != nil {
+		return fmt.Errorf("create metadata.json: %w", err)
+	}
+
+	enc := json.NewEncoder(file)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(meta); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write metadata.json: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close metadata.json: %w", err)
+	}
+
+	return nil
+}
+
+func (w *SegmentWriter) updateManifest() error {
+	manifestPath := manifestPathForSegmentsDir(w.basePath)
+	relPath, err := filepath.Rel(filepath.Dir(manifestPath), w.finalDir)
+	if err != nil {
+		relPath = w.finalDir
+	}
+
+	item := ManifestItem{
+		ID:          w.segmentID,
+		Path:        filepath.ToSlash(relPath),
+		RecordCount: w.recordCount,
+	}
+	return appendManifestItem(manifestPath, item)
+}
+
+func manifestPathForSegmentsDir(segmentsDir string) string {
+	if filepath.Base(segmentsDir) == "segments" {
+		return filepath.Join(filepath.Dir(segmentsDir), "manifest.json")
+	}
+	return filepath.Join(segmentsDir, "manifest.json")
 }
