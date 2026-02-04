@@ -63,7 +63,12 @@ func NewSegmentWriter(basePath string, segmentID int, schema *schema.Schema) (*S
 	for i, col := range schema.Columns {
 		writer, err := createColumnWriter(tempDir, col)
 		if err != nil {
-			os.RemoveAll(tempDir) // Clean up on failure
+			for j := 0; j < i; j++ {
+				if writers[j] != nil {
+					_ = writers[j].Close() // close already created writers
+				}
+			}
+			_ = os.RemoveAll(tempDir) // cleanup on failure
 			return nil, err
 		}
 		writers[i] = writer
